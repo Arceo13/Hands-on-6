@@ -1,55 +1,70 @@
+
 %{
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "parser.tab.h"
-#include "symbol_table.h"
+
+int linea = 1;
 %}
 
-DIGIT    [0-9]
-LETTER   [a-zA-Z_]
-ID       {LETTER}({LETTER}|{DIGIT})*
-INTEGER  {DIGIT}+
-FLOAT    {DIGIT}+\.{DIGIT}+
-STRING   \"([^"\\]|\\.)*\"
-COMMENT  \/\*[^*]*\*+([^/*][^*]*\*+)*\/|\/\/[^\n]*
+DIGITO          [0-9]
+LETRA           [a-zA-Z]
+IDENTIFICADOR   {LETRA}({LETRA}|{DIGITO}|_)*
+NUMERO          {DIGITO}+
+ESPACIO         [ \t]+
 
 %%
 
-"int"       { return INT; }
-"return"    { return RETURN; }
-"void"      { return VOID; }
-"include"   { return INCLUDE; }
-"define"    { return DEFINE; }
-"char"      { return CHAR; }
-"float"     { return FLOAT_TYPE; }
-"double"    { return DOUBLE; }
+"/*"([^*]|\*+[^*/])*\*+"/"  { /* Comentario de bloque */ }
+"//".*                      { /* Comentario de línea */ }
 
-{ID}        { yylval.str = strdup(yytext); return IDENTIFIER; }
-{INTEGER}   { yylval.num = atoi(yytext); return INTEGER; }
-{FLOAT}     { yylval.fnum = atof(yytext); return FLOAT_NUM; }
-{STRING}    { return STRING; }
+"int"           { return INT; }
+"float"         { return FLOAT; }
+"double"        { return DOUBLE; }
+"char"          { return CHAR; }
+"void"          { return VOID; }
+"short"         { return SHORT; }
+"return"        { return RETURN; }
+"include"       { return INCLUDE; }
+"define"        { return DEFINE; }
+"if"            { return IF; }
+"else"          { return ELSE; }
 
-"+"         { return PLUS; }
-"-"         { return MINUS; }
-"*"         { return TIMES; }
-"/"         { return DIVIDE; }
-"="         { return ASSIGN; }
-"++"        { return INCREMENT; }
+{IDENTIFICADOR} { 
+    yylval.str = strdup(yytext); 
+    return ID; 
+}
 
-"("         { return LPAREN; }
-")"         { return RPAREN; }
-"{"         { return LBRACE; }
-"}"         { return RBRACE; }
-";"         { return SEMICOLON; }
-","         { return COMMA; }
-"#"         { return HASH; }
+{NUMERO}        { 
+    yylval.ival = atoi(yytext); 
+    return NUMBER; 
+}
 
-{COMMENT}   { return COMMENT; }
-[ \t\n]     ;
-.           { return UNKNOWN; }
+"++"            { return INCREMENT; }
+"+"             { return '+'; }
+"-"             { return '-'; }
+"*"             { return '*'; }
+"/"             { return '/'; }
+"="             { return '='; }
+"("             { return '('; }
+")"             { return ')'; }
+"{"             { return '{'; }
+"}"             { return '}'; }
+";"             { return ';'; }
+","             { return ','; }
+"#"             { return '#'; }
+"<"             { return '<'; }
+">"             { return '>'; }
+"."             { return '.'; }
+
+{ESPACIO}       { /* ignorar */ }
+\n              { linea++; }
+
+.               { /* ignorar caracteres desconocidos */ }
 
 %%
 
-int yyerror(const char *msg) {
-    fprintf(stderr, "Error léxico: %s\n", msg);
-    return 0;
+int yywrap() {
+    return 1;
 }
