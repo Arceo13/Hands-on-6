@@ -1,46 +1,40 @@
-#include <stdlib.h>
-#define SCALE_FACTOR 2
+#include <stdio.h>
 
-int globalA;
-int globalB;
+int x;
+float y;
 
-int addValues(int first, int second) {
-    int resultLocal;
-    resultLocal = first + second;
-    return resultLocal;
+int suma(int a, int b) {
+    int resultado;
+    resultado = a + b;
+    return resultado;
 }
 
-int processValue(int value) {
-    int temporaryVal;
-    temporaryVal = value * SCALE_FACTOR;
+void prueba() {
+    int z;
+    z = x + 10;   // uso variable global
+    //y = w;      // esto debería dar error: w no declarada
 
-    { /* nested block */
-        int innerResult;
-        innerResult = temporaryVal + 5;
-        print(innerResult);
+    {
+        int z;    // shadowing: z local al bloque
+        z = 5;
+        x = z;
     }
 
-    return temporaryVal;
+    //int z;      // redeclaracion en el mismo scope: error
 }
 
 int main() {
-    int resultMain;
-    int auxValue;
+    x = 5;
+    y = 3.14;
+    int total;
+    total = suma(x, 10);
+    
+    if (total > 10) 
+        x = total;
+    else 
+        y = 0;
 
-    globalA = 3;
-    globalB = 4;
-
-    resultMain = addValues(globalA, globalB);
-    print(resultMain);
-
-    auxValue = processValue(resultMain);
-    print(auxValue);
-
-    {
-        int finalOutput;
-        finalOutput = auxValue + resultMain;
-        print(finalOutput);
-    }
+    prueba();
 
     return 0;
 }
