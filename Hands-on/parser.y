@@ -2,218 +2,317 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "symbol_table.h"
 
-extern int yylex();
-extern int yyparse();
-extern FILE *yyin;
+
 
 void yyerror(const char *s);
-int param_count = 0;
-char current_function[50] = "";
+int yylex(void);
+
+/* ======================
+   ANALISIS SEMANTICO
+   ====================== */
+
+typedef struct Simbolo {
+    char* nombre;
+    char* tipo;          // int, float, función, etc.
+    int num_parametros;  // si es función
+    struct Simbolo* sig;
+} Simbolo;
+
+typedef struct Tabla {
+    Simbolo* head;
+} Tabla;
+
+typedef struct Scope {
+    Tabla* tabla_local;
+    struct Scope* scope_padre;
+} Scope;
+
+Scope* scope_actual = NULL;
+Tabla* tabla_global = NULL;
+
+/* Crear nuevo scope */
+void push_scope() {
+    Scope* nuevo = (Scope*) malloc(sizeof(Scope));
+    nuevo->tabla_local = (Tabla*) malloc(sizeof(Tabla));
+    nuevo->tabla_local->head = NULL;
+    nuevo->scope_padre = scope_actual;
+    scope_actual = nuevo;
+}
+
+/* Salir de scope */
+void pop_scope() {
+    Scope* tmp = scope_actual;
+    scope_actual = scope_actual->scope_padre;
+
+    Simbolo* s = tmp->tabla_local->head;
+    while(s) {
+        Simbolo* aux = s;
+        s = s->sig;
+        free(aux->nombre);
+        free(aux->tipo);
+        free(aux);
+    }
+    free(tmp->tabla_local);
+    free(tmp);
+}
+
+/* Agregar símbolo */
+int agregar_simbolo(const char* nombre, const char* tipo, int num_parametros) {
+    Simbolo* s = scope_actual->tabla_local->head;
+    while(s) {
+        if(strcmp(s->nombre, nombre) == 0) return 0; // redeclaración
+        s = s->sig;
+    }
+    Simbolo* nuevo = (Simbolo*) malloc(sizeof(Simbolo));
+    nuevo->nombre = strdup(nombre);
+    nuevo->tipo = strdup(tipo);
+    nuevo->num_parametros = num_parametros;
+    nuevo->sig = scope_actual->tabla_local->head;
+    scope_actual->tabla_local->head = nuevo;
+    return 1;
+}
+
+/* Buscar símbolo en scopes */
+Simbolo* buscar_simbolo(const char* nombre) {
+    Scope* s = scope_actual;
+    while(s) {
+        Simbolo* sym = s->tabla_local->head;
+        while(sym) {
+            if(strcmp(sym->nombre, nombre) == 0) return sym;
+            sym = sym->sig;
+        }
+        s = s->scope_padre;
+    }
+    return NULL;
+}
 %}
 
 %union {
-    int num;
-    float fnum;
+    int ival;
     char *str;
 }
 
-%token INT RETURN VOID INCLUDE DEFINE CHAR FLOAT_TYPE DOUBLE
-%token IDENTIFIER INTEGER FLOAT_NUM
-%token PLUS MINUS TIMES DIVIDE ASSIGN INCREMENT
-%token LPAREN RPAREN LBRACE RBRACE SEMICOLON COMMA HASH
-%token COMMENT UNKNOWN
+/* Tokens */
+%token <str> ID
+%token <ival> NUMBER
 
-%type <str> type IDENTIFIER
+%token INT FLOAT DOUBLE CHAR VOID SHORT
+%token RETURN INCLUDE DEFINE
+%token IF ELSE
+%token INCREMENT
+
+%type <str> type
+
+/* Resolver conflicto shift/reduce del dangling else */
+%nonassoc LOWER_THAN_ELSE
+%nonassoc ELSE
+
+/* Precedencia de operadores */
+%left '+' '-'
+%left '*' '/'
+
+%type <ival> expr
 
 %%
 
-program: 
-    {
-        init_symbol_table();
-        printf("=== INICIANDO ANÁLISIS SEMÁNTICO ===\n");
-    }
-    global_declarations
+program:
+      translation_unit
     ;
 
-global_declarations:
-    global_declarations global_declaration
-    | global_declaration
+translation_unit:
+      external_decl
+    | translation_unit external_decl
     ;
 
-global_declaration:
-    function_definition
-    | variable_declaration
-    | preprocessor_directive
+external_decl:
+      preprocessor_directive
+    | decl
     ;
 
 preprocessor_directive:
-    HASH INCLUDE STRING
-    | HASH DEFINE IDENTIFIER INTEGER
+      '#' INCLUDE '<' ID '.' ID '>' { printf("Include: <%s.%s>\n", $4, $6); }
+    | '#' INCLUDE ID { printf("Include: %s\n", $3); }
+    | '#' DEFINE ID NUMBER { printf("Define: %s = %d\n", $3, $4); }
+    | '#' DEFINE ID { printf("Define: %s\n", $3); }
     ;
 
-variable_declaration:
-    type IDENTIFIER SEMICOLON
-    {
-        if (!declare_symbol($2, VARIABLE, $1, 0)) {
-            yyerror("Error en declaración de variable");
-        }
-        free($2);
-    }
-    | type IDENTIFIER ASSIGN expression SEMICOLON
-    {
-        if (!declare_symbol($2, VARIABLE, $1, 0)) {
-            yyerror("Error en declaración de variable");
-        }
-        free($2);
-    }
+decl:
+      global_decl
+    | func_decl
+    ;
+
+global_decl:
+      type ID ';' {
+          if(!agregar_simbolo($2, $1, 0))
+              yyerror("Error: redeclaracion de variable global");
+          else
+              printf("Declaracion global: %s\n", $2);
+      }
     ;
 
 type:
-    INT { $$ = "int"; }
-    | FLOAT_TYPE { $$ = "float"; }
-    | CHAR { $$ = "char"; }
-    | VOID { $$ = "void"; }
+      INT
+    | FLOAT
+    | DOUBLE
+    | CHAR
+    | VOID
+    | SHORT
     ;
 
-function_definition:
-    type IDENTIFIER LPAREN parameters RPAREN 
-    {
-        strcpy(current_function, $2);
-        // Crear nuevo scope para la función
-        Scope* function_scope = create_scope($2);
-        push_scope(function_scope);
-        
-        // Declarar la función en el scope global
-        if (!declare_symbol($2, FUNCTION, $1, param_count)) {
-            yyerror("Error en declaración de función");
-        }
-        free($2);
-        param_count = 0;
-    }
-    compound_statement
-    {
-        printf("Finalizando función: %s\n", current_function);
-        pop_scope();
-        current_function[0] = '\0';
-    }
+func_decl:
+      type ID '(' param_list_opt ')' block {
+          if(!agregar_simbolo($2, $1, 0))
+              yyerror("Error: redeclaracion de funcion");
+          else
+              printf("Funcion declarada: %s\n", $2);
+      }
     ;
 
-parameters:
-    parameter_list { param_count = $1; }
-    | VOID { param_count = 0; }
-    | { param_count = 0; }
+param_list_opt:
+      /* vacio */
+    | param_list
     ;
 
-parameter_list:
-    parameter_list COMMA parameter { $$ = $1 + 1; }
-    | parameter { $$ = 1; }
+param_list:
+      param_list ',' param
+    | param
     ;
 
-parameter:
-    type IDENTIFIER 
-    {
-        // Declarar parámetro en el scope actual de la función
-        declare_symbol($2, VARIABLE, $1, 0);
-        free($2);
-        $$ = 1;
-    }
+param:
+      type ID {
+          if(!agregar_simbolo($2, $1, 0))
+              yyerror("Error: redeclaracion de parametro");
+          else
+              printf("Parametro: %s\n", $2);
+      }
     ;
 
-compound_statement:
-    LBRACE 
-    {
-        // Crear scope para bloque
-        Scope* block_scope = create_scope("block");
-        push_scope(block_scope);
-    }
-    statements RBRACE 
-    {
-        pop_scope();
-    }
+block:
+      '{' { push_scope(); }
+      local_decl_list stmt_list
+      '}' { pop_scope(); }
     ;
 
-statements:
-    statements statement
+local_decl_list:
+      local_decl_list local_decl
     | /* vacío */
     ;
 
-statement:
-    variable_declaration
-    | assignment SEMICOLON
-    | expression SEMICOLON
-    | RETURN expression SEMICOLON
-    | compound_statement
+local_decl:
+      type ID ';' {
+          if(!agregar_simbolo($2, $1, 0))
+              yyerror("Error: redeclaracion de variable local");
+          else
+              printf("Variable local: %s\n", $2);
+      }
     ;
 
-assignment:
-    IDENTIFIER ASSIGN expression
-    {
-        check_symbol_exists($1);
-        free($1);
-    }
+stmt_list:
+      stmt_list stmt
+    | /* vacio */
     ;
 
-expression:
-    expression PLUS term
-    | expression MINUS term
-    | term
+stmt:
+      expr ';'
+    | ID '=' expr ';' {
+          if(!buscar_simbolo($1))
+              yyerror("Error: variable no declarada");
+          else
+              printf("Asignacion a: %s\n", $1);
+      }
+    | RETURN expr ';' { printf("Return statement\n"); }
+    | func_call ';'
+    | block
+    | if_stmt
     ;
 
-term:
-    term TIMES factor
-    | term DIVIDE factor
-    | factor
+if_stmt:
+      IF '(' expr ')' stmt %prec LOWER_THAN_ELSE
+    | IF '(' expr ')' stmt ELSE stmt
     ;
 
-factor:
-    INTEGER
-    | FLOAT_NUM
-    | IDENTIFIER 
-    {
-        check_symbol_exists($1);
-        free($1);
-    }
-    | IDENTIFIER LPAREN arguments RPAREN
-    {
-        check_function_params($1, $3);
-        free($1);
-    }
-    | LPAREN expression RPAREN
+func_call:
+      ID '(' arg_list_opt ')' {
+          Simbolo* f = buscar_simbolo($1);
+          if(!f) yyerror("Error: funcion no declarada");
+          else
+              printf("Llamada a funcion: %s\n", $1);
+      }
     ;
 
-arguments:
-    argument_list { $$ = $1; }
-    | { $$ = 0; }
+arg_list_opt:
+      /* vacio */
+    | arg_list
     ;
 
-argument_list:
-    argument_list COMMA expression { $$ = $1 + 1; }
-    | expression { $$ = 1; }
+arg_list:
+      arg_list ',' expr
+    | expr
+    ;
+
+expr:
+      NUMBER { $$ = $1; }
+    | ID {
+          if(!buscar_simbolo($1))
+              yyerror("Error: variable no declarada");
+          $$ = 0;
+      }
+    | func_call { $$ = 0; }
+    | expr '+' expr { $$ = $1 + $3; }
+    | expr '-' expr { $$ = $1 - $3; }
+    | expr '*' expr { $$ = $1 * $3; }
+    | expr '/' expr { $$ = $1 / $3; }
+    | '(' expr ')' { $$ = $2; }
     ;
 
 %%
 
 void yyerror(const char *s) {
-    fprintf(stderr, "Error: %s\n", s);
+    extern int linea;
+    fprintf(stderr, "Error de sintaxis en linea %d: %s\n", linea, s);
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
+    extern FILE *yyin;
+
+    printf("=================================================\n");
+    printf("  COMPILADOR BASICO - Lexer + Parser\n");
+    printf("=================================================\n\n");
+
+    tabla_global = (Tabla*) malloc(sizeof(Tabla));
+    tabla_global->head = NULL;
+    scope_actual = (Scope*) malloc(sizeof(Scope));
+    scope_actual->tabla_local = tabla_global;
+    scope_actual->scope_padre = NULL;
+
     if (argc > 1) {
-        yyin = fopen(argv[1], "r");
-        if (!yyin) {
-            perror("Error al abrir el archivo");
+        FILE *f = fopen(argv[1], "r");
+        if (!f) {
+            fprintf(stderr, "Error: No se pudo abrir el archivo '%s'\n", argv[1]);
             return 1;
         }
-    }
-    
-    printf("=== INICIANDO ANÁLISIS SINTÁCTICO Y SEMÁNTICO ===\n");
-    if (yyparse() == 0) {
-        printf("=== ANÁLISIS COMPLETADO SIN ERRORES ===\n");
+        yyin = f;
+        printf("Analizando archivo: %s\n\n", argv[1]);
     } else {
-        printf("=== SE ENCONTRARON ERRORES ===\n");
+        printf("Leyendo desde entrada estandar...\n\n");
     }
-    
-    return 0;
+
+    int result = yyparse();
+
+    if (result == 0) {
+        printf("\n=================================================\n");
+        printf("   Analisis completado exitosamente :D \n");
+        printf("=================================================\n");
+    } else {
+        printf("\n=================================================\n");
+        printf("   Analisis completado con errores :c\n");
+        printf("=================================================\n");
+    }
+
+    if (argc > 1) {
+        fclose(yyin);
+    }
+
+    return result;
 }
